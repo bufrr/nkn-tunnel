@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"time"
 
 	nkn "github.com/nknorg/nkn-sdk-go"
 	ts "github.com/nknorg/nkn-tuna-session"
@@ -24,13 +25,13 @@ const (
 	tunnelClientIsReady  = "tunnel client is ready"
 	tcpServerIsReady     = "tcp server is ready"
 	udpServerIsReady     = "udp server is ready"
-	tcpDialerExit        = "tcp dialer exit"
+	exit                 = "exit"
 	tcpServerExit        = "tcp server exit"
 	udpServerExit        = "udp server exit"
 	udpClientExit        = "udp client exit"
 )
 
-var ch chan string = make(chan string, 4)
+var ch chan string
 
 func waitFor(ch chan string, status string) {
 	fmt.Println("waiting for ", status)
@@ -104,12 +105,9 @@ func CreateTunaSession(account *nkn.Account, wallet *nkn.Wallet, mc *nkn.MultiCl
 	return
 }
 
-var node *types.Node
+var tunaNode *types.Node
 
 func CreateTunnelConfig(udp bool) *tunnel.Config {
-	if node == nil {
-		node = StartTunaNode()
-	}
 	config := &tunnel.Config{
 		NumSubClients:     numClients,
 		ClientConfig:      CreateClientConfig(3),
@@ -118,7 +116,7 @@ func CreateTunnelConfig(udp bool) *tunnel.Config {
 		TunaSessionConfig: CreateTunaSessionConfig(numClients),
 		Verbose:           true,
 		UDP:               udp,
-		TunaNode:          node,
+		TunaNode:          tunaNode,
 	}
 
 	return config
@@ -175,4 +173,70 @@ func runReverseEntry(seed []byte) error {
 	ch <- tunaNodeStarted
 
 	select {}
+}
+
+func StartTunnelListeners(tuna bool) error {
+	acc, _, err := CreateAccountAndWallet(seedHex)
+	if err != nil {
+		return err
+	}
+
+	config := CreateTunnelConfig(tuna)
+
+	tunnels, err := tunnel.NewTunnels(acc, listenerId, []string{"nkn"}, []string{toPort}, tuna, config)
+	if err != nil {
+		return err
+	}
+	time.Sleep(10 * time.Second) // wait for tuna node is ready
+	if tuna {
+		for _, t := range tunnels {
+			ts := t.TunaSessionClient()
+			<-ts.OnConnect()
+			ch <- tunaSessionConnected
+		}
+	}
+	ch <- tunnelServerIsReady
+	fmt.Printf("tunnel server is ready, toPort is %v\n", toPort)
+
+	for _, t := range tunnels {
+		err = t.Start()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func StartTunnelDialers(tcp, tuna bool) error {
+	acc, _, err := CreateAccountAndWallet(seedHex)
+	if err != nil {
+		return err
+	}
+
+	config := CreateTunnelConfig(tuna)
+	var from []string
+	if tcp {
+		from = fromPorts
+	} else {
+		from = fromUDPPorts
+	}
+
+	tunnels, err := tunnel.NewTunnels(acc, dialerId, from, remoteAddrs, tuna, config)
+	if err != nil {
+		return err
+	}
+
+	for _, t := range tunnels {
+		go func(t *tunnel.Tunnel) {
+			err := t.Start()
+			if err != nil {
+				fmt.Printf("tunnel.Start err: %v\n", err)
+				return
+			}
+		}(t)
+	}
+
+	ch <- tunnelClientIsReady
+	return nil
 }
