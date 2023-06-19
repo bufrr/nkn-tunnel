@@ -192,7 +192,7 @@ func StartTunnelListeners(tuna bool) error {
 		for _, t := range tunnels {
 			ts := t.TunaSessionClient()
 			<-ts.OnConnect()
-			ch <- tunaSessionConnected
+			//ch <- tunaSessionConnected
 		}
 	}
 	ch <- tunnelServerIsReady
